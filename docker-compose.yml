@@ -1,0 +1,143 @@
+services:
+  postgres:
+    image: postgres:14
+    container_name: postgres_db
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin
+      - POSTGRES_DB=threadmark
+    command: ["postgres", "-c", "wal_level=logical"]
+    volumes:
+      - ./db/init_v2.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d threadmark"]
+      interval: 5s     
+      timeout: 5s      
+      retries: 5       
+      start_period: 10s 
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  debezium:
+    image: debezium/connect:2.4
+    container_name: debezium
+    depends_on:
+      - kafka
+      - postgres
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:29092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: my_connect_configs
+      OFFSET_STORAGE_TOPIC: my_connect_offsets
+      STATUS_STORAGE_TOPIC: my_connect_statuses
+
+  datagen:
+      build: .
+      container_name: datagen_faker
+      tty: true
+      stdin_open: true
+      depends_on:
+        postgres:
+          condition: service_healthy
+      volumes:
+        - ./output/log:/app/output/log
+        - ./faker_gen.py:/app/faker_gen.py
+        - ./log:/app/log  
+      environment:
+        - DB_HOST=postgres
+      command: python /app/faker_gen.py
+
+  connector-setup:
+    image: curlimages/curl:latest
+    container_name: connector_setup
+    depends_on:
+      - debezium
+    volumes:
+      - ./connector_config.json:/config.json
+    # 핵심 로직: 데비지움이 응답할 때까지 기다렸다가(20~30초), POST 요청을 보냄
+    entrypoint: 
+      - /bin/sh
+      - -c
+      - |
+        echo "Waiting for Debezium to start..."
+        sleep 30 
+        curl -X POST -H "Content-Type: application/json" \
+             http://debezium:8083/connectors/ \
+             -d @/config.json
+        echo "\nConnector setup finished."
+
+  # spark-master:
+  #   image: apache/spark:3.5.0
+  #   container_name: spark-master
+  #   environment:
+  #     - SPARK_MODE=master
+  #     - SPARK_RPC_AUTHENTICATION_ENABLED=no
+  #     - SPARK_RPC_ENCRYPTION_ENABLED=no
+  #     - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+  #     - SPARK_SSL_ENABLED=no
+  #   ports:
+  #     - "8080:8080"
+  #     - "7077:7077"
+  #   volumes:
+  #     - ./spark_apps:/opt/spark-apps
+
+  # spark-worker:
+  #   image: apache/spark:3.5.0
+  #   container_name: spark-worker
+  #   environment:
+  #     - SPARK_MODE=worker
+  #     - SPARK_MASTER_URL=spark://spark-master:7077
+  #     - SPARK_RPC_AUTHENTICATION_ENABLED=no
+  #     - SPARK_RPC_ENCRYPTION_ENABLED=no
+  #     - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+  #     - SPARK_SSL_ENABLED=no
+  #   depends_on:
+  #     - spark-master
+  #   volumes:
+  #     - ./spark_apps:/opt/spark-apps
+  spark:
+    image: apache/spark:3.5.0
+    container_name: spark_app
+    user: root 
+    ports:
+      - "4040:4040" 
+    volumes:
+      - ./spark_apps:/opt/spark-apps
+    command: >
+      bash -c "tail -f /dev/null"
+    env_file:
+      - .env
+
+  # --- [추가] MinIO (S3 호환 데이터 레이크 스토리지) ---
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    container_name: minio_datalake
+    ports:
+      - "9000:9000" # API 포트 (스파크가 통신할 포트)
+      - "9001:9001" # 웹 UI 포트 (우리가 눈으로 볼 포트)
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=password
+    command: server /data --console-address ":9001"
