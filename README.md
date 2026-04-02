@@ -1,59 +1,124 @@
-## 📋 [프로젝트 명세서 / 시스템 프롬프트]
-### 프로젝트명: CDC 기반 실시간 스트리밍 결함 데이터(Dirty Data) 정제 파이프라인
+# Threadmark
 
-1. Project Overview (프로젝트 개요)
-    이 프로젝트는 실제 이커머스 환경에서 발생할 수 있는 8가지 데이터 장애(Dirty Data & Race Condition) 상황을 의도적으로 발생시키고, 이를 Apache Spark Structured Streaming을 활용해 실시간으로 감지 및 정제(Cleansing)하는 데이터 엔지니어링 파이프라인입니다.
+CDC 기반 실시간 스트리밍 결함 데이터(Dirty Data) 정제 파이프라인
 
-2. Architecture & Tech Stack (아키텍처 및 기술 스택)
-    Data Generator: Python (Faker, psycopg2) - 8대 장애 시나리오에 기반한 트랜잭션 발생
+## 1. 프로젝트 개요
+Threadmark는 이커머스 주문 데이터에서 발생할 수 있는 결함 데이터를 의도적으로 생성하고,
+`PostgreSQL -> Debezium -> Kafka -> Spark Structured Streaming` 파이프라인으로 실시간 정제/격리를 수행하는 프로젝트입니다.
 
-    Source Database: PostgreSQL (V2 Schema)
+핵심 목표는 다음 2가지입니다.
+- 정상 데이터는 Silver 레이어로 안정적으로 적재
+- 결함 데이터는 Quarantine 레이어로 분리하여 운영 리스크 최소화
 
-    CDC (Change Data Capture): Debezium - Postgres의 변경분(WAL)을 감지하여 카프카로 전송
+## 2. 아키텍처
+```text
+[Faker Generator]
+      |
+      v
+[PostgreSQL] --(WAL/CDC)--> [Debezium Connect] --> [Kafka: cdc.public.orders]
+                                                         |
+                                                         v
+                                              [Spark Structured Streaming]
+                                               |                        |
+                                               v                        v
+                            [Silver: orders_cleansed (Parquet)] [Quarantine: orders_failed (Parquet)]
+                                               |
+                                               v
+                                           [dbt Models/Tests]
+```
 
-    Message Broker: Apache Kafka - cdc.public.orders 토픽으로 메시지 스트리밍
+## 3. 기술 스택
+- Data Generator: Python (`faker`, `psycopg2`)
+- Source DB: PostgreSQL
+- CDC: Debezium
+- Broker: Apache Kafka
+- Stream Processing: Apache Spark (PySpark 3.5)
+- Object Storage: MinIO (S3-compatible)
+- Modeling/Tests: dbt
+- Infra: Docker Compose
 
-    Stream Processing: Apache Spark (PySpark) 3.5.0 - 장애 데이터 실시간 정제 및 집계
+## 4. Dirty Data 시나리오 (8종)
+`faker_gen.py`에서 정상/비정상 트랜잭션을 확률적으로 생성합니다.
 
-    Infrastructure: Docker Compose (M1 Mac 환경)
+1. `LATE ARRIVAL`: 과거 시각 데이터 지연 도착
+2. `DUPLICATE`: 동일 주문 중복 삽입
+3. `OUT-OF-ORDER`: 상태 역전 (`DELIVERED -> SHIPPED`)
+4. `BURST`: 짧은 시간 다량 주문
+5. `ZOMBIE ORDER`: 주문은 있으나 결제 없음
+6. `OVERSELLING`: 재고 음수 유도
+7. `PRICE HIJACK`: 주문 총액과 결제 금액 불일치
+8. `SWAPPED SHOP`: 잘못된 shop 매핑 (`shop_id=999` 주입)
 
-3. Database Schema (V2 기준 핵심 구조)
-    categories, products, inventory, customers (기준 정보)
+## 5. 데이터베이스 핵심 스키마
+`db/init_v2.sql` 기준 핵심 테이블
 
-    orders: order_id (PK), customer_id (FK), shop_id (할당 매장), status, created_at
+- `orders(order_id, customer_id, shop_id, status, created_at, updated_at)`
+- `order_items(order_id, product_id, quantity, price)`
+- `payments(order_id, amount, status, created_at)`
+- `inventory(product_id, stock_quantity, updated_at)`
 
-    order_items: order_id (FK), product_id (FK), quantity, price
+CDC 캡처 정확도를 위해 주요 테이블에 `REPLICA IDENTITY FULL`이 적용되어 있습니다.
 
-    payments: order_id (FK), amount, status
+## 6. Spark 정제/격리 로직
+`spark_apps/processor.py` 기준 처리 흐름
 
-    설정: 모든 테이블에 REPLICA IDENTITY FULL 적용 완료.
+1. Kafka JSON 파싱 및 스키마 적용
+2. `created_at` -> `event_time` 변환
+3. 상태 점수화 (`PENDING=1`, `SHIPPED=2`, `DELIVERED=3`)
+4. 워터마크(10분) + 집계
+5. `rejection_reason` 기준 Silver/Quarantine 분기
 
-4. The 8 Dirty Data Scenarios (8대 데이터 결함 시나리오)
-    Python Faker 스크립트는 무한 루프를 돌며 아래 8가지 장애와 1가지 정상 데이터를 확률적으로 발생시킵니다.
+현재 코드 기준 주요 분기 조건
+- `shop_id == 999` -> `INVALID_SHOP_ID`
+- 지나치게 늦은 이벤트 -> `LATE_ARRIVAL`
 
-    [LATE ARRIVAL] 지연 도착: 네트워크 지연을 모사하여 created_at이 현재 시간보다 10분 전인 과거 데이터를 삽입합니다.
+저장 경로
+- Silver: `s3a://silver-layer/orders_cleansed`
+- Quarantine: `s3a://quarantine-layer/orders_failed`
+- Checkpoint: `s3a://silver-layer/checkpoints/orders_v9`
 
-    [DUPLICATE] 중복 발생: 프론트엔드 더블 클릭 버그를 모사하여, 완전히 동일한 트랜잭션을 2번 연속 삽입합니다.
+## 7. dbt 모델/테스트
+`dbt/`에서 Silver/Quarantine 모델과 품질 테스트를 관리합니다.
 
-    [OUT-OF-ORDER] 상태 역전: 비동기 처리 오류를 모사하여, DELIVERED(배송완료) 상태를 먼저 업데이트하고, 1초 뒤에 과거 상태인 SHIPPED(배송중)로 업데이트합니다.
+- 모델: `order_silver.sql`, `order_quarantine.sql`
+- 스키마 테스트: `models/schema.yml`
+- 커스텀 테스트: 지연 도착, 초과 판매, 가격 하이재킹 검증 SQL
 
-    [BURST] 트래픽 폭주: 타임 세일 상황을 모사하여, 짧은 시간 내에 15건의 주문 트랜잭션을 한 번에 발생시킵니다.
+## 8. 빠른 실행 방법
+### 1) 인프라 실행
+```bash
+docker compose up -d
+```
 
-    [ZOMBIE ORDER] 결제 누락: 시스템 장애를 모사하여 orders에는 주문이 들어갔으나 payments 테이블에는 결제 내역이 삽입되지 않은 고아(Orphan) 데이터를 만듭니다.
+### 2) MinIO 버킷 초기화
+```bash
+make init-minio
+```
 
-    [OVERSELLING] 초과 판매: 재고 차감 로직 누락을 모사하여, 단일 상품(Product 1)을 50개 강제 주문 처리하고 재고를 마이너스로 만듭니다.
+### 3) Spark 스트리밍 실행
+```bash
+make run
+```
 
-    [PRICE HIJACK] 결제 금액 불일치: 악의적인 API 변조를 모사하여, 총 주문 금액(Total Price)과 실제 결제 테이블(payments)에 찍힌 금액(예: $1.00)이 다르게 삽입됩니다.
+### 4) (선택) dbt 실행
+```bash
+cd dbt
+dbt run
+dbt test
+```
 
-    [SWAPPED SHOP] 매장 정보 교차 (Race Condition): 동시에 2명의 고객(A, B)이 주문할 때, 동시성 제어 실패로 인해 고객 A의 주문에 매장 B가, 고객 B의 주문에 매장 A의 shop_id가 엇갈려(Cross) 저장됩니다.
+## 9. 디렉터리 구조
+```text
+threadmark/
+├─ db/                   # PostgreSQL init SQL
+├─ spark_apps/           # Spark streaming application
+├─ dbt/                  # dbt models/tests
+├─ faker_gen.py          # dirty-data generator
+├─ connector_config.json # Debezium connector config
+├─ docker-compose.yml    # local infra
+└─ docs/                 # additional documents
+```
 
-5. Spark Streaming Defense Logic (스파크 실시간 정제 로직)
-    Spark processor.py는 카프카에서 데이터를 읽어 들여 아래의 로직으로 결함을 방어합니다.
-
-    스키마 명시 (Schema Enforcement): Debezium JSON 포맷에 맞춰 order_id, customer_id, shop_id, status 등을 강타입(Integer, String)으로 파싱합니다.
-
-    중복 제거 (Duplicate Drop): .withWatermark("event_time", "10 minutes")를 적용하여 메모리 오버헤드를 막고 10분 내의 중복 데이터를 제거합니다.
-
-    상태 역전 방지 (Out-of-Order Handling): PENDING(1) < SHIPPED(2) < DELIVERED(3)로 상태에 점수를 매기고, 윈도우(Window) 그룹핑 후 max(status_score)를 추출하여 항상 최신 상태만 통과시킵니다.
-
-    매장 꼬임 감지 (Swapped Shop Detection): 스파크 내부에 고객-정상매장 매핑 마스터 데이터(Static DataFrame)를 구성한 뒤, 카프카 스트림 데이터와 Stream-Static Join을 수행합니다. 실제 들어온 shop_id와 마스터의 expected_shop_id가 다를 경우 is_swapped = True 플래그를 생성하여 오류 데이터를 색출합니다.
+## 10. 문서 가이드
+- 이 `README.md`: 프로젝트 개요 + 실행 중심 통합 문서
+- `docs/project_overview.md`: 구조/운영 관점 상세 설명 문서
