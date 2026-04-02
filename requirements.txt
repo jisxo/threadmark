@@ -1,3 +1,15 @@
 # requirements.txt
-faker
 psycopg2-binary
+
+# 1. Core Data Engines
+duckdb>=0.9.0         # 자바 없이 S3/Parquet 쿼리 가능
+pandas>=2.0.0         # DuckDB 결과를 표(DataFrame)로 변환
+numpy>=1.24.0          # Pandas 및 DuckDB 연산의 필수 의존성
+
+# 2. S3 & Environment Settings
+python-dotenv>=1.0.0  # .env 파일에서 환경 변수 자동 로드
+boto3>=1.28.0          # S3(MinIO) 파일 직접 컨트롤 및 목록 확인
+
+# 3. Data Generation & Processing
+faker>=19.0.0         # 테스트 데이터(Scenario 1-8) 생성용
+pyspark>=3.5.0         # 스파크 스트리밍 로직 로컬 실행용 (Java 설치 필수)

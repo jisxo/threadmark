@@ -1,4 +1,5 @@
 import os
+from pyspark.sql import functions as F
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col, when, window, max as spark_max
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, LongType
@@ -17,10 +18,30 @@ class OrderProcessor:
                 StructField("customer_id", IntegerType()),
                 StructField("shop_id", IntegerType()),
                 StructField("status", StringType()),
+                StructField("total_price", LongType()),
+                StructField("paid_amount", LongType()),
+                StructField("stock_quantity", IntegerType()),
                 StructField("created_at", LongType()),
             ])),
             StructField("op", StringType())
         ])
+
+    def split_data(self, df):
+        # 8 major defects check and reason tagging (Data Quality Validation)
+        df_tagged = df.withColumn("rejection_reason",
+            F.when(F.col("created_at") < F.current_timestamp() - F.expr("INTERVAL 10 MINUTES"), "LATE_ARRIVAL") # [SCEN 1] LATE_ARRIVAL
+            .when(F.col("paid_amount").isNull(), "ZOMBIE_ORDER") # [SCEN 5] ZOMBIE_ORDER
+            .when(F.col("stock_quantity") < 0, "OVERSELLING") # [SCEN 6] OVERSELLING
+            .when(F.col("paid_amount") < F.col("total_price"), "PRICE_HIJACK") # [SCEN 7] PRICE_HIJACK
+            .when(F.col("shop_id") == 999, "SWAPPED_SHOP") # [SCEN 8] SWAPPED_SHOP
+            .otherwise(None)
+        )
+
+        # 사유가 없으면 Silver(정상), 있으면 Quarantine(결함)
+        silver_df = df_tagged.filter("rejection_reason IS NULL")
+        quarantine_df = df_tagged.filter("rejection_reason IS NOT NULL")
+        
+        return silver_df, quarantine_df
 
     def transform(self, df):
         """Main cleansing logic: Parsing, Flattening, and Flagging."""
@@ -32,12 +53,8 @@ class OrderProcessor:
         ).select("data.after.*", "data.op")
 
         # 2. Add Event Time and other core fields
-        flat_df = parsed_df.select(
-            col("order_id"),
-            col("customer_id"),
-            col("shop_id"),
-            col("status"),
-            (col("created_at") / 1000000).cast("timestamp").alias("event_time")
+        flat_df = parsed_df.withColumn(
+            "event_time", (col("created_at") / 1000000).cast("timestamp")
         )
 
         # 3. Add priority scores to handle 'Out-of-Order' events
@@ -66,30 +83,76 @@ class OrderProcessor:
                 window(col("event_time"), "10 minutes")
             ) \
             .agg(
-                spark_max("status_score").alias("final_status_score")
+                spark_max("status_score").alias("final_status_score"),
+                spark_max("customer_id").alias("cust_id"),
+                spark_max("total_price").alias("total_price"),
+                spark_max("paid_amount").alias("paid_amount"),
+                spark_max("stock_quantity").alias("stock_quantity"),
+                spark_max("event_time").alias("created_at")
             )
 
         return final_df
 
     def save_to_s3(self, batch_df, batch_id):
-        """Saves processed batch to MinIO (S3) in Parquet format."""
-        s3_path = "s3a://silver-layer/orders_cleansed"
+        """Saves processed batch to Silver and Quarantine paths with monitoring."""
+        print(f"\n" + "="*20 + f" BATCH {batch_id} PROCESSING START " + "="*20)
+
+        # 1. Split data using validation logic (This adds 'rejection_reason' column)
+        df_silver, df_quarantine = self.split_data(batch_df)
         
-        # Extract start and end times from the window struct
-        db_df = batch_df.select(
-            "order_id", "shop_id", "is_swapped",
-            col("window.start").alias("window_start"),
-            col("window.end").alias("window_end"),
-            "final_status_score"
+        # 2. Monitor counts for console logging
+        silver_count = df_silver.count()
+        quarantine_count = df_quarantine.count()
+        
+        print(f"[*] Summary - Silver: {silver_count} records / Quarantine: {quarantine_count} records")
+
+        # 3. Handle Clean Data (Silver)
+        if silver_count > 0:
+            s3_silver_path = "s3a://silver-layer/orders_cleansed"
+            # Select specific columns for Silver Layer
+            df_silver.select(
+                "order_id", "cust_id", "shop_id", "total_price", "paid_amount",
+                "stock_quantity", "is_swapped", "final_status_score", "created_at"
+            ).write.format("parquet").mode("append").save(s3_silver_path)
+            print(f"[OK] Successfully saved {silver_count} records to Silver Layer.")
+
+        # 4. Handle Dirty Data (Quarantine) - CRITICAL for A2 Evidence
+        if quarantine_count > 0:
+            print(f"🚨 ALERT: {quarantine_count} defects detected in Batch {batch_id}!")
+            
+            # Show the actual failed data in terminal (This is what you capture!)
+            print(">>> QUARANTINE DATA PREVIEW (Reason Tagging):")
+            df_quarantine.select("order_id", "shop_id", "rejection_reason", "created_at").show()
+            
+            # Save to Quarantine path for debugging/reprocessing
+            s3_quarantine_path = "s3a://quarantine-layer/orders_failed"
+            df_quarantine.write.format("parquet").mode("append").save(s3_quarantine_path)
+            print(f"[FAIL] Saved {quarantine_count} records to Quarantine Layer.")
+            
+        else:
+            # Even if 0, show structure once to prove the logic is running
+            print(">>> QUARANTINE STATUS: No defects found in this batch.")
+
+        print("="*20 + f" BATCH {batch_id} PROCESSING END " + "="*20 + "\n")
+        
+
+    def split_data(self, df):
+        # 8대 결함 체크 및 사유 기록
+        df_validated = df.withColumn("rejection_reason", 
+            F.when(F.col("shop_id") == 999, "INVALID_SHOP_ID")
+            .when(F.col("created_at") < F.current_timestamp() - F.expr("INTERVAL 1 HOUR"), "LATE_ARRIVAL")
+            .otherwise(None)
         )
         
-        # Save to S3 bucket in Parquet format (Append mode)
-        db_df.write.format("parquet").mode("append").save(s3_path)
-
+        # 정상(Silver)과 결함(Quarantine) 분리
+        silver_df = df_validated.filter(F.col("rejection_reason").isNull())
+        quarantine_df = df_validated.filter(F.col("rejection_reason").isNotNull())
+        
+        return silver_df, quarantine_df
 
     def run(self):
         """Starts the streaming pipeline."""
-        KAFKA_SERVER = "kafka:29092"
+        KAFKA_SERVER = "kafka:29092".strip()
         TOPIC = "cdc.public.orders"
 
         raw_df = self.spark.readStream \
@@ -97,7 +160,12 @@ class OrderProcessor:
             .option("kafka.bootstrap.servers", KAFKA_SERVER) \
             .option("subscribe", TOPIC) \
             .option("startingOffsets", "earliest") \
+            .option("maxOffsetsPerTrigger", 1000) \
             .load()
+
+        # [캡처 1-A] 
+        # print("\n" + "!"*30 + " CAPTURE THIS: RAW SCHEMA " + "!"*30+"\n")
+        # raw_df.printSchema()
 
         clean_df = self.transform(raw_df)
 
@@ -105,10 +173,15 @@ class OrderProcessor:
         query = clean_df.writeStream \
             .foreachBatch(self.save_to_s3) \
             .outputMode("update") \
-            .option("checkpointLocation", "s3a://silver-layer/checkpoints/orders_v1") \
+            .option("checkpointLocation", "s3a://silver-layer/checkpoints/orders_v9") \
             .start()
 
+        # [캡처 1-A] 
+        # print("\n" + "!"*30 + " CAPTURE THIS: SILVER SCHEMA " + "!"*30+"\n")
+        # clean_df.printSchema()
+
         query.awaitTermination()
+
 
 def create_spark_session(app_name):
     """
@@ -118,6 +191,7 @@ def create_spark_session(app_name):
     # 1. Initialize SparkSession
     spark = SparkSession.builder \
         .appName(app_name) \
+        .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0") \
         .getOrCreate()
 
     # 2. Set Log Level
@@ -129,7 +203,7 @@ def create_spark_session(app_name):
     # Load from environment variables
     access_key = os.getenv("MINIO_ACCESS_KEY")
     secret_key = os.getenv("MINIO_SECRET_KEY")
-    endpoint = os.getenv("MINIO_ENDPOINT")
+    endpoint = os.getenv("MINIO_ENDPOINT").replace("http://", "").replace("https://", "").strip("/")
 
     hadoop_conf.set("fs.s3a.access.key", access_key)
     hadoop_conf.set("fs.s3a.secret.key", secret_key)
@@ -141,6 +215,9 @@ def create_spark_session(app_name):
     hadoop_conf.set("fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
 
     return spark
+
+
+
 
 if __name__ == "__main__":
     # Now the entry point is clean and focused on execution

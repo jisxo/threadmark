@@ -1,0 +1,24 @@
+version: 2
+
+sources:
+  - name: main
+    tables:
+      - name: orders_cleansed
+      
+models:
+  - name: order_silver
+    description: "Threadmark 장애 시뮬레이션 검증 모델"
+    columns:
+      - name: order_id
+        tests:
+          - unique       # [Scenario 2: DUPLICATE] 중복 전송 방지
+          - not_null     # [Scenario 5: ZOMBIE] 주문 존재 여부 확인
+      - name: shop_id
+        tests:
+          - accepted_values:
+              values: "{{ range(1, 51) | list }}" # [Scenario 8: SWAPPED SHOP] 1~50 외(999 등) 차단
+              
+      - name: final_status_score # 상태 점수 (정상 범위 0~3 가정)
+        tests:
+          - accepted_values:
+              values: [0, 1, 2, 3]
