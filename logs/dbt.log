@@ -1,0 +1,59 @@
+[0m22:47:09.479412 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x7f97e0483b20>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x7f97f02729d0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x7f97f02854f0>]}
+
+
+============================== 22:47:09.484217 | f55004f8-cbc3-4232-b47d-df148c082061 ==============================
+[0m22:47:09.484217 [info ] [MainThread]: Running with dbt=1.8.7
+[0m22:47:09.484914 [debug] [MainThread]: running dbt with arguments {'printer_width': '80', 'indirect_selection': 'eager', 'log_cache_events': 'False', 'write_json': 'True', 'partial_parse': 'True', 'cache_selected_only': 'False', 'profiles_dir': '/Users/dido/.dbt', 'version_check': 'True', 'warn_error': 'None', 'log_path': 'logs', 'debug': 'False', 'fail_fast': 'False', 'use_colors': 'True', 'use_experimental_parser': 'False', 'empty': 'None', 'quiet': 'False', 'no_print': 'None', 'warn_error_options': 'WarnErrorOptions(include=[], exclude=[])', 'introspect': 'True', 'static_parser': 'True', 'invocation_command': 'dbt debug', 'target_path': 'None', 'log_format': 'default', 'send_anonymous_usage_stats': 'True'}
+[0m22:47:09.498513 [info ] [MainThread]: dbt version: 1.8.7
+[0m22:47:09.498951 [info ] [MainThread]: python version: 3.8.10
+[0m22:47:09.499244 [info ] [MainThread]: python path: /Users/dido/workspace/mini_projects/threadmark/venv/bin/python3
+[0m22:47:09.499521 [info ] [MainThread]: os info: macOS-10.16-x86_64-i386-64bit
+[0m22:47:09.500104 [error] [MainThread]: Encountered an error:
+local variable 'summary_message' referenced before assignment
+[0m22:47:09.502146 [error] [MainThread]: Traceback (most recent call last):
+  File "/Users/dido/workspace/mini_projects/threadmark/venv/lib/python3.8/site-packages/dbt/cli/requires.py", line 138, in wrapper
+    result, success = func(*args, **kwargs)
+  File "/Users/dido/workspace/mini_projects/threadmark/venv/lib/python3.8/site-packages/dbt/cli/requires.py", line 101, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/dido/workspace/mini_projects/threadmark/venv/lib/python3.8/site-packages/dbt/cli/main.py", line 406, in debug
+    results = task.run()
+  File "/Users/dido/workspace/mini_projects/threadmark/venv/lib/python3.8/site-packages/dbt/task/debug.py", line 120, in run
+    load_profile_status: SubtaskStatus = self._load_profile()
+  File "/Users/dido/workspace/mini_projects/threadmark/venv/lib/python3.8/site-packages/dbt/task/debug.py", line 207, in _load_profile
+    profile_names, summary_message = self._choose_profile_names()
+  File "/Users/dido/workspace/mini_projects/threadmark/venv/lib/python3.8/site-packages/dbt/task/debug.py", line 282, in _choose_profile_names
+    return profiles, summary_message
+UnboundLocalError: local variable 'summary_message' referenced before assignment
+
+[0m22:47:09.509464 [debug] [MainThread]: Resource report: {"command_name": "debug", "command_wall_clock_time": 0.09276684, "process_user_time": 1.068221, "process_kernel_time": 0.515129, "process_mem_max_rss": "89956352", "command_success": false, "process_in_blocks": "0", "process_out_blocks": "0"}
+[0m22:47:09.510314 [debug] [MainThread]: Command `dbt debug` failed at 22:47:09.510003 after 0.09 seconds
+[0m22:47:09.510728 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x7f97e0483b20>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x7f97f02854f0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x7f97f0285730>]}
+[0m22:47:09.511085 [debug] [MainThread]: Flushing usage events
+[0m22:50:00.873081 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x7ff310466af0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x7ff2e04548b0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x7ff2e046a4c0>]}
+
+
+============================== 22:50:00.878802 | 5d92ae5c-b0ae-460a-83bf-dc355168a18b ==============================
+[0m22:50:00.878802 [info ] [MainThread]: Running with dbt=1.8.7
+[0m22:50:00.879454 [debug] [MainThread]: running dbt with arguments {'printer_width': '80', 'indirect_selection': 'eager', 'log_cache_events': 'False', 'write_json': 'True', 'partial_parse': 'True', 'cache_selected_only': 'False', 'warn_error': 'None', 'version_check': 'True', 'profiles_dir': '/Users/dido/.dbt', 'log_path': 'logs', 'fail_fast': 'False', 'debug': 'False', 'use_colors': 'True', 'use_experimental_parser': 'False', 'empty': 'None', 'quiet': 'False', 'no_print': 'None', 'log_format': 'default', 'static_parser': 'True', 'introspect': 'True', 'invocation_command': 'dbt init threadmark', 'target_path': 'None', 'warn_error_options': 'WarnErrorOptions(include=[], exclude=[])', 'send_anonymous_usage_stats': 'True'}
+[0m22:50:00.894965 [debug] [MainThread]: Starter project path: /Users/dido/workspace/mini_projects/threadmark/venv/lib/python3.8/site-packages/dbt/include/starter_project
+[0m22:50:00.908357 [info ] [MainThread]: 
+Your new dbt project "threadmark" was created!
+
+For more information on how to configure the profiles.yml file,
+please consult the dbt documentation here:
+
+  https://docs.getdbt.com/docs/configure-your-profile
+
+One more thing:
+
+Need help? Don't hesitate to reach out to us via GitHub issues or on Slack:
+
+  https://community.getdbt.com/
+
+Happy modeling!
+
+[0m22:50:00.908923 [info ] [MainThread]: Setting up your profile.
+[0m22:50:29.236756 [debug] [MainThread]: Resource report: {"command_name": "init", "command_success": true, "command_wall_clock_time": 28.431316, "process_user_time": 1.169334, "process_kernel_time": 0.223067, "process_mem_max_rss": "89985024", "process_in_blocks": "0", "process_out_blocks": "0"}
+[0m22:50:29.238116 [debug] [MainThread]: Command `dbt init` succeeded at 22:50:29.237796 after 28.43 seconds
+[0m22:50:29.238678 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x7ff310466af0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x7ff311990fd0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x7ff320f01280>]}
+[0m22:50:29.239220 [debug] [MainThread]: Flushing usage events

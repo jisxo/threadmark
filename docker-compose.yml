@@ -17,12 +17,16 @@ services:
       timeout: 5s      
       retries: 5       
       start_period: 10s 
+    networks:
+      - threadmark-network
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
     container_name: zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
+    networks:
+      - threadmark-network
 
   kafka:
     image: confluentinc/cp-kafka:7.4.0
@@ -37,6 +41,9 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+    networks:
+      - threadmark-network
 
   debezium:
     image: debezium/connect:2.4
@@ -52,6 +59,8 @@ services:
       CONFIG_STORAGE_TOPIC: my_connect_configs
       OFFSET_STORAGE_TOPIC: my_connect_offsets
       STATUS_STORAGE_TOPIC: my_connect_statuses
+    networks:
+      - threadmark-network
 
   datagen:
       build: .
@@ -68,6 +77,8 @@ services:
       environment:
         - DB_HOST=postgres
       command: python /app/faker_gen.py
+      networks:
+      - threadmark-network
 
   connector-setup:
     image: curlimages/curl:latest
@@ -76,6 +87,8 @@ services:
       - debezium
     volumes:
       - ./connector_config.json:/config.json
+    networks:
+      - threadmark-network
     # 핵심 로직: 데비지움이 응답할 때까지 기다렸다가(20~30초), POST 요청을 보냄
     entrypoint: 
       - /bin/sh
@@ -129,6 +142,10 @@ services:
       bash -c "tail -f /dev/null"
     env_file:
       - .env
+    networks:
+      - threadmark-network
+    depends_on:
+      - kafka
 
   # --- [추가] MinIO (S3 호환 데이터 레이크 스토리지) ---
   minio:
@@ -141,3 +158,9 @@ services:
       - MINIO_ROOT_USER=admin
       - MINIO_ROOT_PASSWORD=password
     command: server /data --console-address ":9001"
+    networks:
+      - threadmark-network
+
+networks:
+  threadmark-network:
+    driver: bridge
